@@ -1,6 +1,7 @@
 # ビルドの生成物
 build/
 build-*/
+dist/
 *.sgx
 *.elf
 *.map
