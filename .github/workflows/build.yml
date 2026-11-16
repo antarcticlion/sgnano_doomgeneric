@@ -1,0 +1,49 @@
+name: build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  doom-sgx:
+    name: DOOM.SGX
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install the ARM toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-arm-none-eabi libnewlib-arm-none-eabi cmake ninja-build python3
+          arm-none-eabi-gcc --version
+          cmake --version
+          ninja --version
+
+      - name: Build
+        run: ./scripts/build.sh -DDOOM_WERROR=ON
+
+      - name: Verify the SGX image
+        run: python3 scripts/check_sgx.py --name Doom --flags 1 --abi-major 5 build/sgx/doom.sgx
+
+      - name: Stage the artifact
+        run: |
+          mkdir -p dist
+          cp build/sgx/doom.sgx dist/DOOM.SGX
+          sha256sum dist/DOOM.SGX
+
+      - name: Upload the artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: doom-sgx
+          path: dist/DOOM.SGX
+          if-no-files-found: error

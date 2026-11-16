@@ -1,0 +1,18 @@
+# ビルドの生成物
+build/
+build-*/
+*.sgx
+*.elf
+*.map
+*.su
+*.o
+*.d
+
+# WAD（Freedoom・市販版）は置かない。wads/README.md を見る
+wads/*.wad
+wads/*.WAD
+
+# 道具の残り
+.DS_Store
+__pycache__/
+*.pyc

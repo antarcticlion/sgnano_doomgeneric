@@ -1,0 +1,30 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 20,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "sgx",
+      "displayName": "SGX (arm-none-eabi)",
+      "description": "Build DOOM.SGX with the sgnano SGX SDK",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build",
+      "toolchainFile": "${sourceDir}/cmake/toolchain-arm-none-eabi.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "sgx",
+      "configurePreset": "sgx",
+      "targets": [
+        "doom"
+      ]
+    }
+  ]
+}
