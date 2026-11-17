@@ -12,6 +12,7 @@ dist/
 # WAD（Freedoom・市販版）は置かない。wads/README.md を見る
 wads/*.wad
 wads/*.WAD
+wads/freedoom-0.13.0/
 
 # 道具の残り
 .DS_Store
