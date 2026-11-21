@@ -1,10 +1,11 @@
 # sgnano の外部実行ファイル（SGX）を組む（2026-10-24、docs/sgx_abi.md）。
-#   sgx_add_program(<target> NAME <表示名> [FLAGS <数>] [STACK <バイト>] SOURCES <...>)
+#   sgx_add_program(<target> NAME <表示名> [FLAGS <数>] [STACK <バイト>] [LIBS <...>] SOURCES <...>)
 # できるもの: ${CMAKE_BINARY_DIR}/sgx/<target>.sgx（像）と <target>.elf（読み解き用）。ファームとは結ばない（API の表だけを使う）
 set(SGX_SDK_DIR ${CMAKE_CURRENT_LIST_DIR})
 
 function(sgx_add_program target)
-    cmake_parse_arguments(P "" "NAME;FLAGS;STACK" "SOURCES;DEFINES;INCLUDES;OPTIONS" ${ARGN})
+    # LIBS: プログラムが使う静的ライブラリ（2026-11-17、sgnano_wav2mp3 の SDK と同じ。LAME を m / c / gcc より先に置くため）
+    cmake_parse_arguments(P "" "NAME;FLAGS;STACK" "SOURCES;DEFINES;INCLUDES;OPTIONS;LIBS" ${ARGN})
     if(NOT P_FLAGS)
         set(P_FLAGS 0)
     endif()
@@ -20,7 +21,8 @@ function(sgx_add_program target)
     # -q（--emit-relocs）: 再配置の情報を残す（sgx_link.py が表を作る）
     target_link_options(${target} PRIVATE -T${SGX_SDK_DIR}/sgx.ld -nostartfiles --specs=nano.specs -Wl,--gc-sections -Wl,-q
                         -Wl,-Map=${CMAKE_BINARY_DIR}/sgx/${target}.map)
-    target_link_libraries(${target} PRIVATE m c gcc)
+    # LIBS を先に置く（libmp3lame.a の中の powf / log10f を、あとの -lm で解決するため）
+    target_link_libraries(${target} PRIVATE ${P_LIBS} m c gcc)
     # 倍精度の計算をファームの DCP の版へ（sgx_dmath.S、ABI 1.1、2026-10-25）。並びは include/sgx_dfuncs.inc
     file(STRINGS ${SGX_SDK_DIR}/include/sgx_dfuncs.inc _sgx_df REGEX "^SGX_DF\\(")
     foreach(_l ${_sgx_df})
