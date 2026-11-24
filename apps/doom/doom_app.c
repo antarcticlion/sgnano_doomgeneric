@@ -32,22 +32,32 @@ void M_FindResponseFile(void);
 void D_DoomMain(void);
 void doomgeneric_Tick(void);
 
+typedef struct { uint8_t *ptr; uint32_t size; } zseg_t;
+
 static struct {
     uint8_t  *zone;
     uint32_t  zone_size;
     void     *fbp[8];
     unsigned  fbp_n;
+    zseg_t    zseg[9];                  // zone + fbp[] を番地昇順に並べて隣接結合したもの
+    unsigned  zseg_n;
     uint16_t  load_drawn;               // 読み込みの画面に描いた進み具合（千分率）。0xFFFF = 未だ描いていない
     char      wad[200], dir[200];
-    char     *argv[4];
+    char     *argv[16];
 } D;
 
 // ---- ゾーン（third_party/doomgeneric の i_system.c・z_zone.c の sgnano: から）----
-uint8_t *DG_ZoneBase(int *size) { *size = (int)D.zone_size; return D.zone; }
-uint8_t *DG_ZoneExtra(int i, int *size) {                       // 番地の小さい順（ゾーンの塊は番地の順に並ぶ決まり）
-    if (i < 0 || (unsigned)i >= D.fbp_n) return NULL;
-    *size = (int)(640u * 480u * 2u);
-    return D.fbp[i];
+// z_zone.c の Z_Init は DG_ZoneBase より後ろの番地だけ DG_ZoneExtra で連結する。
+// ABI 5.18 以降は FB ページが PSRAM の最下位に配置されるため、D.zone と D.fbp[] を
+// まとめて番地昇順ソート＋隣接結合し、先頭を DG_ZoneBase、残りを DG_ZoneExtra で返す。
+uint8_t *DG_ZoneBase(int *size) {
+    *size = D.zseg_n ? (int)D.zseg[0].size : 0;
+    return D.zseg_n ? D.zseg[0].ptr : NULL;
+}
+uint8_t *DG_ZoneExtra(int i, int *size) {
+    if (i < 0 || (unsigned)(i + 1) >= D.zseg_n) return NULL;
+    *size = (int)D.zseg[i + 1].size;
+    return D.zseg[i + 1].ptr;
 }
 
 // ---- 時刻・眠り ----
@@ -236,12 +246,32 @@ static void draw_loading(unsigned pm) {
     char p[8]; snprintf(p, sizeof p, "%u%%", pm / 10u);
     bm_fill(v, 0, BAR_Y + BAR_H + 6u, SGX_BM_W, 16, C_BLACK);
     bm_puts(v, (SGX_BM_W - bm_width(p, 1)) / 2u, BAR_Y + BAR_H + 6u, p, C_WHITE, 1);
+    if (sgx->size >= offsetof(sgx_api_t, bm_flush) + sizeof sgx->bm_flush && sgx->bm_flush)
+        sgx->bm_flush(0, 0, SGX_BM_W, SGX_BM_H);
     D.load_drawn = (uint16_t)pm;
 }
 
 // ---- 入口 ----
-static void sort_ptrs(void **p, unsigned n) {
-    for (unsigned i = 1; i < n; i++) for (unsigned j = i; j && (uintptr_t)p[j - 1] > (uintptr_t)p[j]; j--) { void *t = p[j]; p[j] = p[j - 1]; p[j - 1] = t; }
+static void build_zone_segs(uint32_t fb_bytes) {
+    zseg_t raw[9];
+    unsigned n = 0;
+    if (D.zone && D.zone_size) raw[n++] = (zseg_t){ D.zone, D.zone_size };
+    for (unsigned i = 0; i < D.fbp_n && n < 9u; i++) {
+        if (D.fbp[i] && fb_bytes) raw[n++] = (zseg_t){ (uint8_t *)D.fbp[i], fb_bytes };
+    }
+    for (unsigned i = 1; i < n; i++) {
+        for (unsigned j = i; j && (uintptr_t)raw[j - 1].ptr > (uintptr_t)raw[j].ptr; j--) {
+            zseg_t t = raw[j]; raw[j] = raw[j - 1]; raw[j - 1] = t;
+        }
+    }
+    D.zseg_n = 0;
+    for (unsigned i = 0; i < n; i++) {
+        if (D.zseg_n && D.zseg[D.zseg_n - 1u].ptr + D.zseg[D.zseg_n - 1u].size == raw[i].ptr) {
+            D.zseg[D.zseg_n - 1u].size += raw[i].size;
+        } else {
+            D.zseg[D.zseg_n++] = raw[i];
+        }
+    }
 }
 // 設定（default.cfg・doomgenericdoom.cfg）はシステムのドライブ S: に（2026-10-25 ユーザー指示）。Doom II の形の IWAD は Doom2Settings、ほかは DoomSettings。
 // フォルダが無ければ作り、前の置き場（WAD のフォルダ）にだけ設定があれば写す（元は残す）。セーブは WAD のフォルダのまま
@@ -280,7 +310,9 @@ int sgx_main(const sgx_api_t *api, int argc, char **argv) {
     // （2026-10-24: 無かったので Doom2Files で freedoom1.wad を探して黙って終わり、「起動しない」に見えた。
     //   2026-10-29: A:/DOOM.SGX から A:/DoomFiles/freedoom1.wad を見つけられるようにした）
     const char *wad = NULL;
-    for (int i = 1; i + 1 < argc; i++) if (!strcmp(argv[i], "-iwad")) wad = argv[i + 1];
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "-iwad") && i + 1 < argc) wad = argv[++i];
+    }
     if (wad) snprintf(D.wad, sizeof D.wad, "%s", wad);
     else {
         static const char *const names[] = { "freedoom1.wad", "freedoom2.wad", "doom.wad", "doomu.wad", "doom1.wad", "doom2.wad", "plutonia.wad", "tnt.wad", NULL };
@@ -326,8 +358,8 @@ int sgx_main(const sgx_api_t *api, int argc, char **argv) {
     snprintf(D.dir, sizeof D.dir, "%s", D.wad);
     char *sl = strrchr(D.dir, '/');
     if (sl) *sl = 0;
-    // 画面モード 7。テキスト面は閉じる（SRAM を 2 枚の面・ファイルの書き込みの作業場に）
-    const char *e = api->set_mode(SGX_MODE_TEXT_BM8 | SGX_MODE_NO_TEXT);
+    // 画面モード 7。テキスト面は閉じ、SGX_MODE_BM_CACHED で音楽オーバーレイ（OPL2）を守る
+    const char *e = api->set_mode(SGX_MODE_TEXT_BM8 | SGX_MODE_NO_TEXT | SGX_MODE_BM_CACHED);
     if (e) { printf("[doom] screen: %s\n", e); return 1; }
     const uint8_t *back = api->bm_back();
     if (!back) printf("[doom] no SRAM for the back buffer, drawing on the shown bitmap\n");
@@ -344,14 +376,24 @@ int sgx_main(const sgx_api_t *api, int argc, char **argv) {
     if (!heap || !D.zone) { printf("[doom] not enough PSRAM (zone %lu KB)\n", (unsigned long)(z / 1024u)); return 1; }
     uint32_t pb = 0;
     D.fbp_n = api->fb_borrow(D.fbp, 8, &pb);                    // FB のページもゾーンに（画面モード 7 では FB を使わない）
-    sort_ptrs(D.fbp, D.fbp_n);
+    build_zone_segs(pb);
+    uint32_t total_z = 0;
+    for (unsigned i = 0; i < D.zseg_n; i++) total_z += D.zseg[i].size;
     dg_heap_init(heap, DOOM_HEAP_BYTES);
     dg_set_base_dir(D.dir);
     set_config_dir();
     static char a0[] = "doom", a1[] = "-iwad";
-    D.argv[0] = a0; D.argv[1] = a1; D.argv[2] = D.wad; D.argv[3] = NULL;
-    printf("[doom] start %s (zone %lu KB + FB %u x %lu KB)\n", D.wad, (unsigned long)(D.zone_size / 1024u), D.fbp_n, (unsigned long)(pb / 1024u));
-    myargc = 3; myargv = D.argv;
+    int narg = 0;
+    D.argv[narg++] = a0; D.argv[narg++] = a1; D.argv[narg++] = D.wad;
+    for (int i = 1; i < argc && narg < 15; i++) {
+        if (!strcmp(argv[i], "-iwad")) { i++; continue; }
+        D.argv[narg++] = argv[i];
+    }
+    D.argv[narg] = NULL;
+    printf("[doom] start %s (zone %lu KB in %u segs: alloc %lu KB + FB %u x %lu KB)\n",
+           D.wad, (unsigned long)(total_z / 1024u), D.zseg_n,
+           (unsigned long)(D.zone_size / 1024u), D.fbp_n, (unsigned long)(pb / 1024u));
+    myargc = narg; myargv = D.argv;
     M_FindResponseFile();
     D_DoomMain();                                               // 初めの 1 回分まで進む
     for (;;) doomgeneric_Tick();

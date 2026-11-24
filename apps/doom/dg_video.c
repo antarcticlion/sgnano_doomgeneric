@@ -1,5 +1,5 @@
 // Doom の映像（2026-10-24、外部実行ファイル DOOM.SGX）: doomgeneric の i_video.c の代わり。画面モード 7（320x200x8）。
-// Doom は後ろの面（SGX の API の bm_back、SRAM）に描き、描き終えたら bm_present（ファームがフレームの境目に表示の面へ写す。物のちらつきを無くす）。
+// Doom は後ろの面（SGX の API の bm_back）に描き、描き終えたら bm_present（ファームがフレームの境目に表示の面へ写す。物のちらつきを無くす）。
 // 後ろの面が取れなければ表示の面（bm_vram）に直に描く。パレットは 256 色をビットマップのパレットへ
 #include "doomtype.h"
 #include "i_video.h"
@@ -40,8 +40,20 @@ void I_GetEvent(void);
 void I_StartTic(void) { I_GetEvent(); }
 void I_UpdateNoBlit(void) {}
 void I_FinishUpdate(void) {
+    static uint32_t last_ms, last_frames;
     dg_frames++;
     if (I_VideoBuffer != sgx->bm_vram()) sgx->bm_present();   // 写すまで次を描かない（描きかけが写らないように）
+    const uint32_t now = sgx->ms();
+    if (!last_ms) { last_ms = now; last_frames = dg_frames; return; }
+    if (now - last_ms >= 5000u) {
+        const uint32_t df = dg_frames - last_frames;
+        const uint32_t dt = now - last_ms;
+        const uint32_t fps_x10 = dt ? (df * 10000u) / dt : 0u;
+        printf("[doom] fps=%lu.%lu (%lu fr)\n",
+               (unsigned long)(fps_x10 / 10u), (unsigned long)(fps_x10 % 10u), (unsigned long)df);
+        last_ms = now;
+        last_frames = dg_frames;
+    }
 }
 void I_ReadScreen(byte *scr) { memcpy(scr, I_VideoBuffer, SGX_BM_W * SGX_BM_H); }
 void I_SetPalette(byte *palette) {
